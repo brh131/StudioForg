@@ -7,11 +7,13 @@ using UnityEngine.U2D;
 using UnityEngine.Splines;
 using Unity.VisualScripting;
 using UnityEditor.SearchService;
+using Unity.Mathematics;
 
-public class SplinePlatform : MonoBehaviour, ISpline
+public class SplinePlatform : MonoBehaviour
 {
     SpriteShapeController controller;
-    UnityEngine.U2D.Spline spline;
+    UnityEngine.U2D.Spline u2d_spline;
+    UnityEngine.Splines.Spline spline;
     List<BezierKnot> knots = new List<BezierKnot>();
     public GameObject testObject;
     public GameObject testTangent;
@@ -20,177 +22,58 @@ public class SplinePlatform : MonoBehaviour, ISpline
     public GameObject rObject;
     public float t;
 
+    [Header("Test Variables")]
+    public Vector3 observedVelocity;
+    public Vector3 lastPosition;
+    public float observedSpeed;
     void Awake()
     {
         controller = GetComponent<SpriteShapeController>();
-        spline = controller.spline;
+        u2d_spline = controller.spline;
         ReloadSpline();
 
-        float partsSum = 0f;
-        for(int i = 0; i < knots.Count; i++)
+        foreach(BezierKnot knot in spline)
         {
-            BezierKnot knot = knots[i];
             Instantiate(testObject, knot.Position, Quaternion.identity);
             Instantiate(lObject, knot.Position + knot.TangentIn, Quaternion.identity);
             Instantiate(lObject, knot.Position + knot.TangentOut, Quaternion.identity);
-            StartCoroutine(CurvesTest(GetCurve(i)));
-            float partLength = GetCurveLength(i);
-            print(String.Format("Length of curve {0} is {1}",i,partLength));
-            partsSum += partLength;
         }
-        print(String.Format("Sum of curve lengths is {0}", partsSum));
-        print(String.Format("Total length via method is {0}", GetLength()));
-
-    }
-
-    public IEnumerator<BezierKnot> GetEnumerator()
-    {
-        return knots.GetEnumerator();
-    }
-
-    IEnumerator IEnumerable.GetEnumerator()
-    {
-        return GetEnumerator();
+        testObject.transform.position = spline.EvaluatePosition(0.0f);
+        lastPosition = testObject.transform.position;
     }
     // Update is called once per frame
     void Update()
     {
-        //t = Time.time;
-        //testObject.transform.position = GetPoint(t);
-        //testTangent.transform.position = testObject.transform.position + GetTangent(t);
-        //testNormal.transform.position = testObject.transform.position + GetNormal(t);
-    }
+        t = (Time.time / 10.0f) % 1f;
+        float3 position, tangent, normal;
+        spline.Evaluate(t, out position, out tangent, out normal);
+        testObject.transform.position = position;
+        testTangent.transform.position = position + tangent;
+        testNormal.transform.position = testObject.transform.position + GetNormal(t);
 
+        observedVelocity = testObject.transform.position - lastPosition;
+        observedVelocity /= Time.deltaTime;
+        observedSpeed = observedVelocity.magnitude;
+        lastPosition = testObject.transform.position;
+    }
     public void ReloadSpline()
     {
-        knots = new List<BezierKnot>();
-        int count = spline.GetPointCount();
+        spline = new UnityEngine.Splines.Spline();
+        spline.Closed = !u2d_spline.isOpenEnded;
+        int count = u2d_spline.GetPointCount();
         for (int i = 0; i < count; i++)
         {
-            Vector3 pt = transform.TransformPoint(spline.GetPosition(i));
-            Vector3 lTan = Vector3.Scale(spline.GetLeftTangent(i), transform.localScale);
-            Vector3 rTan = Vector3.Scale(spline.GetRightTangent(i), transform.localScale);
+            Vector3 pt = transform.TransformPoint(u2d_spline.GetPosition(i));
+            Vector3 lTan = Vector3.Scale(u2d_spline.GetLeftTangent(i), transform.localScale);
+            Vector3 rTan = Vector3.Scale(u2d_spline.GetRightTangent(i), transform.localScale);
 
-            knots.Add(new BezierKnot(pt,lTan,rTan));
+            spline.Add(new BezierKnot(pt, lTan, rTan));
         }
     }
-    public BezierCurve GetCurve(int i)
+// Built in normal calculation sucks ass for my purposes so I will make my own.
+    public Vector3 GetNormal(float t)
     {
-        int start;
-        int end;
-        if(Closed)
-        {
-            start = i % Count;
-            end = (i + 1) % Count;
-        }
-        else
-        {
-            start = i;
-            end = i + 1;
-        }
-        return new BezierCurve(this[start], this[end]);
-    }
-
-    public float GetCurveLength(int i)
-    {
-        return CurveUtility.CalculateLength(GetCurve(i));
-    }
-
-    public float GetLength()
-    {
-        float sum = 0f;
-        int numCurves;
-        if(Closed)
-        {
-            numCurves = Count;
-        }
-        else
-        {
-            numCurves = Count - 1;
-        }
-
-        for(int i = 0; i<numCurves; i++)
-        {
-            sum += GetCurveLength(i);
-        }
-        return sum;
-    }
-    /*
-    Vector3 GetPoint(float t)
-    {
-        if(spline.isOpenEnded)
-        {
-            if (t < 0f || t > knots.Count)
-                throw new IndexOutOfRangeException("Spline parameter out of range for open-ended spline.");
-
-            int seg = Mathf.FloorToInt(t);
-            return BezierUtility.BezierPoint(knots[seg] + rTangents[seg], knots[seg], knots[seg + 1], knots[seg + 1] + lTangents[seg + 1], t);
-        }
-        else
-        {
-            // closed splines have one extra segment than open ended ones: from Knot n-1 to Knot 0.
-            t = t % knots.Count;
-            if (t < 0f) { t += knots.Count; }
-            int seg = Mathf.FloorToInt(t % knots.Count);
-            int end = (seg + 1) % knots.Count;
-            return BezierUtility.BezierPoint(knots[seg] + rTangents[seg], knots[seg], knots[end], knots[end] + lTangents[end], t % 1f);
-        }
-    }
-
-    Vector3 GetTangent(float t)
-    {
-        //NOTE: Parameters for my tangent function are in a different order than those in the built in BezierPoint.
-        if (spline.isOpenEnded)
-        {
-            if (t < 0f || t > knots.Count)
-                throw new IndexOutOfRangeException("Spline parameter out of range for open-ended spline.");
-
-            int seg = Mathf.FloorToInt(t);
-            return MyUtils.BezierTangentNormalized(knots[seg], knots[seg] + rTangents[seg], knots[seg + 1] + lTangents[seg + 1], knots[seg + 1], t);
-        }
-        else
-        {
-            // closed splines have one extra segment than open ended ones: from Knot n-1 to Knot 0.
-            t = t % knots.Count;
-            if(t < 0f) { t += knots.Count; }
-            int seg = Mathf.FloorToInt(t % knots.Count);
-            int end = (seg + 1) % knots.Count;
-            return MyUtils.BezierTangentNormalized(knots[seg], knots[seg] + rTangents[seg], knots[end] + lTangents[end], knots[end], t % 1f);
-        }
-    }
-    //This class assumes that all sprite shapes move counter-clockwise (paths moving to the right are 'up' and paths moving to the left are 'down'
-    Vector3 GetNormal(float t)
-    {
-        Vector3 tan = GetTangent(t);
-        return Vector3.Normalize(Vector3.Cross(tan, new Vector3(0f,0f,-1f)));
-    }
-    */
-    //ISpline Methods and Properties
-    public bool Closed
-    {
-        get { return !spline.isOpenEnded; }
-    }
-
-    public BezierKnot this[int i]
-    {
-        get
-        {
-            return knots[i];
-        }
-    }
-    public int Count
-    {
-        get { return spline.GetPointCount(); }
-    }
-
-    IEnumerator CurvesTest(BezierCurve curve)
-    {
-        GameObject testPoint = Instantiate(testObject, curve.P0, Quaternion.identity);
-        while(true)
-        {
-            Vector3 pos = CurveUtility.EvaluatePosition(curve, (0.5f * Time.time) % 1f);
-            testPoint.transform.position = pos;
-            yield return null;
-        }
+        Vector3 tangent = spline.EvaluateTangent(t);
+        return Vector3.Normalize(Vector3.Cross(tangent, Vector3.back));
     }
 }
